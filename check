@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# Parse options, now accepts only: --clean
+
+clean=0 # Reconfigure project
+debug=0 # Run in debug mode
+
+while getopts "h?c:" opt; do
+    case "$opt" in
+        h|\?)
+	    echo "Welcome"
+            ;;
+
+        c)
+	    clean=1
+            ;;
+    esac
+done
+
+if [[ "$OPTIND" -gt 1 ]]; then
+    shift "$(($OPTIND - 2))"
+fi
+
+if [[ -z "$@" ]]; then
+    echo "You need to provide file to use checker on!"
+    exit 1
+fi
+
+# By default use zapcc for faster recompilation
+
+if [[ -z "${USE_ZAPCC}" ]]; then
+    USE_ZAPCC=1
+fi
+
+# If not zapcc is chosen, use clang instead
+
+if [[ "${USE_ZAPCC}" -eq "0" ]]; then
+    cxx_compiler="clang++"
+    __c_compiler="clang"
+else
+    cxx_compiler="zapcc++"
+    __c_compiler="zapcc"
+fi
+
+# CXX_COMPILER and C_COMPILER override choice by USE_ZAPCC
+
+if [[ ! -z "${CXX_COMPILER}" ]]; then
+    cxx_compiler="${CXX_COMPILER}"
+fi
+
+if [[ ! -z "${C_COMPILER}" ]]; then
+    __c_compiler="${CXX_COMPILER}"
+fi
+
+# BUILD_TYPE allows to override build type
+
+if [[ -z "${BUILD_TYPE}" ]]; then
+    build_type="Debug"
+fi
+
+current_path="$(pwd -P)"
+
+# Figure out relative path to this script (note: do not move it!)
+parent_path="$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd -P)"
+
+mkdir -p "$parent_path/build"
+cd "$parent_path/build"
+
+# Clean cmake cache to reconfigure! 
+
+if [[ ! "$clean" -eq "0" ]]; then
+    rm CMakeCache.txt
+fi
+
+echo =============" CONFIGURE BUILD ============"
+
+if cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE="${build_type}" -G Ninja \
+	-DCMAKE_CXX_COMPILER="${cxx_compiler}" -DCMAKE_C_COMPILER="${__c_compiler}" \
+	-DFORCE_COLORED_OUTPUT=ON >/dev/null; then
+
+    echo "Configuration successful!"
+    echo
+
+fi
+
+# Build our checker!
+
+echo "================ BUILDING ================"
+
+ts=$(date +%s%N)
+
+cmake --build .
+
+tt=$((($(date +%s%N) - $ts)/1000000))
+echo "Time taken: $tt milliseconds"
+echo
+
+cd ..
+
+echo "================ CHECKING ================"
+
+ts=$(date +%s%N)
+
+cd "$current_path"
+run_command="clang++ -cc1 -analyze -load \"$parent_path/build/csa-checker.so\" -analyzer-checker=test.Current \"$@\""
+
+if [[ ! "$debug" -eq "0" ]]; then
+    lldb -- "$run_command"
+else
+    sh -c "$run_command"
+fi
+
+echo
+echo "------------------------------------------"
+
+tt=$((($(date +%s%N) - $ts)/1000000))
+echo "Time taken: $tt milliseconds"
+
+echo "------------------------------------------"
